@@ -1,0 +1,57 @@
+name: Build APK
+on:
+  workflow_dispatch:
+    inputs:
+      tag: {required: true}
+      appName: {required: true}
+      packageId: {required: true}
+      versionName: {required: true}
+      versionCode: {required: true}
+permissions: {contents: write}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with: {gradle-version: '8.7'}
+      - name: Scaffold
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import os, pathlib
+          name = os.environ['APP_NAME']
+          pkg = os.environ['PKG']
+          ver = os.environ['VER']
+          vcode = os.environ['VCODE']
+          pkg_path = pkg.replace('.', '/')
+          for d in ['app/src/main/java/'+pkg_path, 'app/src/main/assets']:
+              pathlib.Path(d).mkdir(parents=True, exist_ok=True)
+          pathlib.Path('settings.gradle').write_text('pluginManagement{repositories{google();mavenCentral();gradlePluginPortal()}}\ndependencyResolutionManagement{repositories{google();mavenCentral()}}\nrootProject.name="app"\ninclude \':app\'\n')
+          pathlib.Path('build.gradle').write_text("plugins{id 'com.android.application' version '8.5.2' apply false}\n")
+          pathlib.Path('gradle.properties').write_text('android.useAndroidX=true\norg.gradle.jvmargs=-Xmx2048m\n')
+          pathlib.Path('app/build.gradle').write_text('plugins{id \'com.android.application\'}\nandroid{namespace \''+pkg+'\' compileSdk 34 defaultConfig{applicationId "'+pkg+'" minSdk 24 targetSdk 34 versionCode '+vcode+' versionName "'+ver+'"}\nbuildTypes{release{minifyEnabled false signingConfig signingConfigs.debug}}\ncompileOptions{sourceCompatibility JavaVersion.VERSION_17 targetCompatibility JavaVersion.VERSION_17}}\ndependencies{implementation \'androidx.appcompat:appcompat:1.7.0\' implementation \'androidx.webkit:webkit:1.11.0\'}\n')
+          safe = name.replace('&','&amp;').replace('<','&lt;').replace('"','&quot;')
+          pathlib.Path('app/src/main/AndroidManifest.xml').write_text('<?xml version="1.0" encoding="utf-8"?>\n<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n  <uses-permission android:name="android.permission.INTERNET"/>\n  <application android:label="'+safe+'" android:allowBackup="true" android:usesCleartextTraffic="true" android:theme="@style/Theme.AppCompat.NoActionBar">\n    <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>\n  </application>\n</manifest>\n')
+          sname = name.replace('\\','\\\\').replace('"','\\"')
+          pathlib.Path('app/src/main/java/'+pkg_path+'/MainActivity.java').write_text('package '+pkg+';\nimport android.annotation.SuppressLint;import android.os.Bundle;import android.view.KeyEvent;import android.webkit.*;import android.widget.Toast;import androidx.appcompat.app.AppCompatActivity;\npublic class MainActivity extends AppCompatActivity{private WebView w;\n@SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);w=new WebView(this);setContentView(w);WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(true);s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);w.addJavascriptInterface(new Bridge(),"Android");w.setWebViewClient(new WebViewClient());w.setWebChromeClient(new WebChromeClient());w.loadUrl("file:///android_asset/index.html");}\npublic class Bridge{@JavascriptInterface public String platform(){return "android";}@JavascriptInterface public String appName(){return "'+sname+'";}@JavascriptInterface public void toast(String m){runOnUiThread(()->Toast.makeText(MainActivity.this,m,Toast.LENGTH_SHORT).show());}@JavascriptInterface public void haptic(String t){runOnUiThread(()->{android.os.Vibrator v=(android.os.Vibrator)getSystemService(VIBRATOR_SERVICE);if(v!=null)v.vibrate(40);});}}\n@Override public boolean onKeyDown(int k,KeyEvent e){if(k==KeyEvent.KEYCODE_BACK&&w.canGoBack()){w.goBack();return true;}return super.onKeyDown(k,e);}}\n')
+          src = pathlib.Path('app-source.html').read_text(encoding='utf-8')
+          src = src.replace('</body>', '<scr'+'ipt>if(window.Android&&Android.toast){try{Android.toast("Halo dari '+sname+'")}catch(e){}}</scr'+'ipt></body>') if '</body>' in src else src
+          pathlib.Path('app/src/main/assets/index.html').write_text(src, encoding='utf-8')
+          PY
+        env:
+          APP_NAME: ${{ inputs.appName }}
+          PKG: ${{ inputs.packageId }}
+          VER: ${{ inputs.versionName }}
+          VCODE: ${{ inputs.versionCode }}
+      - name: Build
+        run: gradle assembleRelease --no-daemon --console=plain
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.appName }}
+          files: app/build/outputs/apk/release/app-release.apk
