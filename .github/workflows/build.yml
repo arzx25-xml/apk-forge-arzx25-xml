@@ -16,10 +16,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
+      
+      # CACHE: Mempercepat build selanjutnya
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
         with: {gradle-version: '8.7'}
-      - name: Scaffold
+        
+      - name: Scaffold & Inject
         shell: bash
         run: |
           python3 <<'PY'
@@ -40,7 +52,6 @@ jobs:
           sname = name.replace('\\','\\\\').replace('"','\\"')
           pathlib.Path('app/src/main/java/'+pkg_path+'/MainActivity.java').write_text('package '+pkg+';\nimport android.annotation.SuppressLint;import android.os.Bundle;import android.view.KeyEvent;import android.webkit.*;import android.widget.Toast;import androidx.appcompat.app.AppCompatActivity;\npublic class MainActivity extends AppCompatActivity{private WebView w;\n@SuppressLint("SetJavaScriptEnabled") @Override protected void onCreate(Bundle b){super.onCreate(b);w=new WebView(this);setContentView(w);WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(true);s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);w.addJavascriptInterface(new Bridge(),"Android");w.setWebViewClient(new WebViewClient());w.setWebChromeClient(new WebChromeClient());w.loadUrl("file:///android_asset/index.html");}\npublic class Bridge{@JavascriptInterface public String platform(){return "android";}@JavascriptInterface public String appName(){return "'+sname+'";}@JavascriptInterface public void toast(String m){runOnUiThread(()->Toast.makeText(MainActivity.this,m,Toast.LENGTH_SHORT).show());}@JavascriptInterface public void haptic(String t){runOnUiThread(()->{android.os.Vibrator v=(android.os.Vibrator)getSystemService(VIBRATOR_SERVICE);if(v!=null)v.vibrate(40);});}}\n@Override public boolean onKeyDown(int k,KeyEvent e){if(k==KeyEvent.KEYCODE_BACK&&w.canGoBack()){w.goBack();return true;}return super.onKeyDown(k,e);}}\n')
           src = pathlib.Path('app-source.html').read_text(encoding='utf-8')
-          src = src.replace('</body>', '<scr'+'ipt>if(window.Android&&Android.toast){try{Android.toast("Halo dari '+sname+'")}catch(e){}}</scr'+'ipt></body>') if '</body>' in src else src
           pathlib.Path('app/src/main/assets/index.html').write_text(src, encoding='utf-8')
           PY
         env:
@@ -48,9 +59,12 @@ jobs:
           PKG: ${{ inputs.packageId }}
           VER: ${{ inputs.versionName }}
           VCODE: ${{ inputs.versionCode }}
-      - name: Build
+          
+      - name: Build APK
         run: gradle assembleRelease --no-daemon --console=plain
-      - uses: softprops/action-gh-release@v2
+        
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}
           name: ${{ inputs.appName }}
