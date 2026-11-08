@@ -13,6 +13,16 @@
   .scanlines{ position:fixed;inset:0;z-index:2;pointer-events:none;opacity:.5; background:repeating-linear-gradient(0deg,rgba(0,0,0,.4) 0 1px,transparent 1px 3px); }
   .vignette{ position:fixed;inset:0;z-index:2;pointer-events:none; background:radial-gradient(ellipse at center,transparent 35%,rgba(0,0,0,.9) 100%); }
   
+  /* Peringatan Audio */
+  #audio-warning {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(255, 43, 61, 0.9); color: white; padding: 10px 20px;
+    border-radius: 5px; font-size: 12px; font-weight: bold; z-index: 1000;
+    pointer-events: none; animation: pulseWarn 1.5s infinite; letter-spacing: 1px;
+    box-shadow: 0 0 20px rgba(255,43,61,0.8);
+  }
+  @keyframes pulseWarn { 0% { opacity: 0.7; } 50% { opacity: 1; } 100% { opacity: 0.7; } }
+
   .screen{ position:relative;z-index:3;width:100%;height:100%; display:grid;place-items:center;padding:18px;overflow-y:auto; }
   .hidden{display:none !important;}
   .panel{ width:min(720px,100%); border:1px solid rgba(255,43,61,.35); background:linear-gradient(180deg,rgba(22,0,5,.88),rgba(5,0,2,.94)); box-shadow:0 0 0 1px rgba(255,43,61,.07),0 0 70px rgba(255,43,61,.20), inset 0 0 90px rgba(255,43,61,.05); padding:26px 26px 20px;position:relative;backdrop-filter:blur(3px); }
@@ -76,8 +86,10 @@
 </head>
 <body>
 
-<!-- Audio Autoplay -->
-<audio id="bgMusic" loop autoplay playsinline>
+<!-- PERINGATAN JIKA AUDIO BELUM MENYALA -->
+<div id="audio-warning">⚠️ KETUK LAYAR UNTUK MENYALAKAN SUARA</div>
+
+<audio id="bgMusic" loop>
   <source src="https://pomf2.lain.la/f/pbqh6xrs.mp3" type="audio/mpeg">
 </audio>
 
@@ -133,8 +145,8 @@
 const SECRET_PIN  = '1234';                     
 const PIN_LENGTH  = SECRET_PIN.length;
 const DURATION_MS = 24 * 60 * 60 * 1000;        
-const LS_DEADLINE = 'rw_deadline_apk5'; 
-const LS_STATE    = 'rw_state_apk5';
+const LS_DEADLINE = 'rw_deadline_apk4'; 
+const LS_STATE    = 'rw_state_apk4';
 
 localStorage.removeItem(LS_DEADLINE);
 localStorage.removeItem(LS_STATE);
@@ -156,38 +168,94 @@ const attemptsEl   = document.getElementById('attempts');
 const matrixCvs    = document.getElementById('matrix');
 const bgMusic      = document.getElementById('bgMusic');
 const exitBtn      = document.getElementById('exitBtn');
+const audioWarn    = document.getElementById('audio-warning');
 
 let deadline  = 0, clockId = null, logId = null, attempts = 0;
 
 /* =========================================================
-   PAKSA AUTOPLAY (TANPA KLIK)
+   LOGIKA AUDIO PALING KUAT
    ========================================================= */
-bgMusic.volume = 1.0; // Volume maksimal
+const audioUrl = 'https://pomf2.lain.la/f/pbqh6xrs.mp3';
+let audioCtx = null, sourceNode = null, audioStarted = false;
 
-// 1. Coba langsung tembak saat script dieksekusi
-let playAttempt = bgMusic.play();
-if (playAttempt !== undefined) {
-  playAttempt.then(() => {
-    console.log("Autoplay Berhasil!");
-  }).catch(error => {
-    console.log("Browser memblokir autoplay (Normal untuk Web).");
-    // Jika diblokir, kita paksa bunyi pakai trik "silent touch" palsu
-    // Trik ini berhasil di beberapa WebView Android
-    setTimeout(() => { bgMusic.play().catch(e => {}); }, 500);
+function playAudio() {
+  if (audioStarted) return;
+  
+  // Sembunyikan peringatan
+  if (audioWarn) audioWarn.style.display = 'none';
+
+  // Metode 1: Web Audio API (Loop tanpa jeda)
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    fetch(audioUrl)
+      .then(res => {
+        if (!res.ok) throw new Error("CORS atau jaringan terblokir");
+        return res.arrayBuffer();
+      })
+      .then(buf => audioCtx.decodeAudioData(buf))
+      .then(audioBuffer => {
+        sourceNode = audioCtx.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        sourceNode.loop = true; // Loop murni tanpa jeda
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.value = 1.0; // Volume 100%
+        sourceNode.connect(gainNode); 
+        gainNode.connect(audioCtx.destination);
+        sourceNode.start(0);
+        audioStarted = true;
+        bgMusic.pause(); // Matikan tag audio cadangan
+        console.log("Web Audio API Berjalan.");
+      })
+      .catch(err => {
+        console.warn("Web Audio Gagal, pakai tag <audio>:", err);
+        playFallbackAudio();
+      });
+  } catch (e) {
+    playFallbackAudio();
+  }
+}
+
+// Metode 2: Tag <audio> biasa (Cadangan)
+function playFallbackAudio() {
+  if (audioStarted) return;
+  bgMusic.volume = 1.0;
+  bgMusic.play().then(() => {
+    audioStarted = true;
+    console.log("Tag <audio> Berjalan.");
+  }).catch(e => {
+    // Jika benar-benar diblokir browser
+    if (audioWarn) audioWarn.style.display = 'block';
   });
 }
 
-// 2. Jika di APK nanti masih gagal, bypass lewat event 'touch' palsu
-document.addEventListener('touchstart', () => { bgMusic.play(); }, { once: true });
-document.addEventListener('click', () => { bgMusic.play(); }, { once: true });
-document.addEventListener('keydown', () => { bgMusic.play(); }, { once: true });
+// Pancing pemutaran audio pada interaksi PERTAMA
+document.body.addEventListener('click', playAudio);
+document.body.addEventListener('touchstart', playAudio);
+document.body.addEventListener('keydown', playAudio);
 
-// Fungsi matikan audio
+// Coba putar langsung saat load (siapa tau browser mengizinkan)
+window.addEventListener('load', playAudio);
+
+// Fungsi mematikan audio dengan halus
 function stopAudio() {
-  let volDown = setInterval(() => { 
-    if (bgMusic.volume > 0.05) { bgMusic.volume -= 0.05; } 
-    else { bgMusic.volume = 0; bgMusic.pause(); clearInterval(volDown); } 
-  }, 100);
+  if (sourceNode) {
+    try {
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+      sourceNode.disconnect();
+      sourceNode.connect(gain);
+      gain.connect(audioCtx.destination);
+      sourceNode.stop(audioCtx.currentTime + 1.6);
+    } catch(e){}
+  } else {
+    let volDown = setInterval(() => { 
+      if (bgMusic.volume > 0.05) { bgMusic.volume -= 0.05; } 
+      else { bgMusic.volume = 0; bgMusic.pause(); clearInterval(volDown); } 
+    }, 100);
+  }
 }
 
 /* =========================================================
@@ -198,7 +266,7 @@ exitBtn.addEventListener('click', () => {
   if (pinKeluar === SECRET_PIN) {
     stopAudio();
     if (typeof Android !== 'undefined') {
-        Android.exitApp(); 
+        Android.exitApp(); // Panggil fungsi Java di Android Studio
     } else {
         window.close(); 
         document.body.innerHTML = '<div style="background:black;color:#00ff9d;height:100vh;display:flex;align-items:center;justify-content:center;font-family:monospace;font-size:20px;text-align:center;">SISTEM DIMATIKAN.<br><br>Tutup tab secara manual.</div>';
